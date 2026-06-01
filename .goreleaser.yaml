@@ -1,0 +1,164 @@
+version: 2
+
+# ── Project ───────────────────────────────────────────────────────────────────
+project_name: heimdal
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+builds:
+  - id: heimdal
+    main: ./main.go
+    binary: heimdal
+
+    # Monorepo: GoReleaser çalışma dizini apps/cli/ olmalı.
+    # `goreleaser release --config apps/cli/.goreleaser.yaml` ile çağrılır.
+
+    env:
+      - CGO_ENABLED=0
+
+    goos:
+      - linux
+      - darwin
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
+
+    # Windows'ta arm64 çok az kullanıcı var, atla.
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+    ldflags:
+      - -s -w
+      - -X github.com/ai-la/cli/cmd.Version={{.Version}}
+      - -X github.com/ai-la/cli/cmd.Commit={{.Commit}}
+      - -X github.com/ai-la/cli/cmd.Date={{.Date}}
+archives:
+  - id: heimdal
+    builds:
+      - heimdal
+
+    # darwin/linux → .tar.gz   windows → .zip
+    format_overrides:
+      - goos: windows
+        format: zip
+
+    name_template: "heimdal_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+    files:
+      - README.md
+
+# ── Checksums ─────────────────────────────────────────────────────────────────
+checksum:
+  name_template: "heimdal_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# ── Changelog ────────────────────────────────────────────────────────────────
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "🚀 Features"
+      regexp: "^feat"
+      order: 0
+    - title: "🐛 Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "⚡ Performance"
+      regexp: "^perf"
+      order: 2
+    - title: "Other"
+      order: 999
+
+# ── GitHub Release ────────────────────────────────────────────────────────────
+release:
+  name_template: "v{{ .Version }}"
+
+  # Draft olarak yayınla, manuel onay sonrası publish.
+  draft: false
+  prerelease: auto  # tag'de -rc / -beta varsa otomatik pre-release
+
+  header: |
+    ## Heimdal CLI {{ .Version }}
+
+    **Step 1: Install heimdal CLI**
+
+    Use one of the following methods.
+
+    Native Install (Recommended)
+
+    macOS, Linux, WSL:
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/coone-ai/heimdal/main/scripts/install.sh | bash
+    ```
+
+    Windows PowerShell:
+    ```powershell
+    irm https://raw.githubusercontent.com/coone-ai/heimdal/main/scripts/install.ps1 | iex
+    ```
+
+    Windows CMD:
+    ```cmd
+    curl -fsSL https://raw.githubusercontent.com/coone-ai/heimdal/main/scripts/install.cmd -o install.cmd && install.cmd && del install.cmd
+    ```
+
+    Python (pip):
+    ```bash
+    pip install coone-ailab-cli
+    ```
+
+    Homebrew:
+    ```bash
+    brew install heimdal/tap/heimdal
+    ```
+
+# ── Homebrew Tap ──────────────────────────────────────────────────────────────
+brews:
+  - name: heimdal
+    repository:
+      owner: heimdal
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+
+    commit_author:
+      name: heimdal-bot
+      email: bot@heimdal.dev
+
+    homepage: "https://heimdal.dev"
+    description: "Heimdal CLI — AI agent test aracı"
+    license: "MIT"
+
+    # Sadece stable release'lerde tap'i güncelle.
+    skip_upload: auto
+
+    install: |
+      bin.install "heimdal"
+
+    test: |
+      system "#{bin}/heimdal", "--version"
+
+# ── install.sh için raw binary upload ────────────────────────────────────────
+# GoReleaser'ın oluşturduğu archives dışında,
+# install.sh'ın doğrudan indirebileceği düz binary'ler de yükle.
+blobs: []   # S3/GCS blob yükleme gerekirse buraya ekle.
+
+# ── Snapshot (CI preview builds) ─────────────────────────────────────────────
+snapshot:
+  # `goreleaser build --snapshot` ile tag olmadan local build.
+  version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
+
+# ── Announce (opsiyonel) ──────────────────────────────────────────────────────
+# announce:
+#   slack:
+#     enabled: true
+#     message_template: "Heimdal CLI {{ .Version }} released! {{ .ReleaseURL }}"

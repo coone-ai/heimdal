@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coone-ailab-cli"
+version = "0.0.1"
+description = "Python bootstrap launcher for Heimdal CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "Co-one" }
+]
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+]
+
+[project.urls]
+Homepage = "https://github.com/coone-ai/heimdal"
+Source = "https://github.com/coone-ai/heimdal"
+Issues = "https://github.com/coone-ai/heimdal/issues"
+
+[project.scripts]
+heimdal = "ailab_eval.launcher:main"
+coval = "ailab_eval.launcher:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
