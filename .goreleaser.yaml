@@ -6,7 +6,7 @@ project_name: heimdal
 # ── Build ─────────────────────────────────────────────────────────────────────
 builds:
   - id: heimdal
-    main: ./main.go
+    main: .
     binary: heimdal
 
     # Monorepo: GoReleaser çalışma dizini apps/cli/ olmalı.
