@@ -29,6 +29,13 @@ type model struct {
 	history       []string
 	historyIdx    int
 	scrollOffset  int
+	tourActive    bool
+	tourIndex     int
+	tourRunning   bool
+	tourTyping    bool
+	tourTyped     int
+	tourStepIdx   int
+	tourSummary   string
 }
 
 func initialModel() model {
@@ -63,6 +70,69 @@ type commandDoneMsg struct {
 }
 
 type placeholderTickMsg struct{}
+type tourTickMsg struct{}
+type tourFinishMsg struct{}
+
+type tourItem struct {
+	Command    string
+	Note       string
+	MockOutput []string
+}
+
+var quickTour = []tourItem{
+	{
+		Command: "auth login",
+		Note:    "Authenticate your account in browser.",
+		MockOutput: []string{
+			"Starting localhost callback server  ✓",
+			"Generating CSRF state token  ✓",
+			"Opening browser  ✓",
+			"Waiting for sign-in  Token received ✓",
+			"Saving token  user@coone.ai ✓",
+		},
+	},
+	{
+		Command: "org use 85e66f2c-e5c8-4128-a572-e2e747c3387f",
+		Note:    "Select your working organization.",
+		MockOutput: []string{
+			"Active organization: 85e66f2c-e5c8-4128-a572-e2e747c3387f",
+		},
+	},
+	{
+		Command: "use 9c954b3b-bfc7-4ce9-bb67-31f5fad7eef9",
+		Note:    "Set active project context.",
+		MockOutput: []string{
+			"Active project: 9c954b3b-bfc7-4ce9-bb67-31f5fad7eef9",
+		},
+	},
+	{
+		Command: "init --integration 46bc18c8-a52c-47f1-9675-91ac29767ffe",
+		Note:    "Create/update heimdal.yaml for your integration.",
+		MockOutput: []string{
+			"Creating heimdal.yaml...",
+			"Integration endpoint: https://api.ailab.co-one.co/v1/chat/completions",
+			"Auto Run defaults: test=AT-01 scenario=A",
+			"heimdal.yaml created ✓",
+		},
+	},
+	{
+		Command: "test auto --test-id AT-01 --scenario A",
+		Note:    "Run your first Auto Run test.",
+		MockOutput: []string{
+			"Run ID: 3ffb6...  status=completed",
+			"Score: 0.91  verdict=PASS",
+			"Cases: 40  failed: 2",
+			"Report URL: https://ailab.co-one.co/runs/3ffb6...",
+		},
+	},
+}
+
+const (
+	tourTypeDelay   = 55 * time.Millisecond
+	tourRunDelay    = 700 * time.Millisecond
+	tourGapDelay    = 4 * time.Second
+	tourFinishDelay = 8 * time.Second
+)
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -71,6 +141,98 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.placeholder.advance()
 		}
 		return m, tickPlaceholder()
+
+	case tourTickMsg:
+		if !m.tourActive {
+			return m, nil
+		}
+		if m.tourIndex >= len(quickTour) {
+			return m, tickTourFinish()
+		}
+
+		item := quickTour[m.tourIndex]
+		label := "heimdal " + item.Command
+
+		if !m.tourRunning && !m.tourTyping {
+			m.tourSummary = fmt.Sprintf("Step %d/%d: %s", m.tourIndex+1, len(quickTour), item.Note)
+			m.steps = append(m.steps, Step{None, fmt.Sprintf("Step %d/%d", m.tourIndex+1, len(quickTour)), "", Info})
+			m.steps = append(m.steps, Step{None, tourProgressLine(m.tourIndex+1, len(quickTour)), "", Info})
+			m.steps = append(m.steps, Step{Bash, "", "running", Running})
+			m.tourStepIdx = len(m.steps) - 1
+			m.tourTyped = 0
+			m.tourTyping = true
+			m.scrollToBottom()
+			return m, tickTourType()
+		}
+
+		if m.tourTyping {
+			fullRunes := []rune(label)
+			advance := 2
+			if m.tourTyped+advance > len(fullRunes) {
+				advance = len(fullRunes) - m.tourTyped
+			}
+			m.tourTyped += advance
+			if m.tourTyped < 0 {
+				m.tourTyped = 0
+			}
+			if m.tourStepIdx >= 0 && m.tourStepIdx < len(m.steps) {
+				m.steps[m.tourStepIdx] = Step{Bash, string(fullRunes[:m.tourTyped]), "running", Running}
+			}
+			m.scrollToBottom()
+			if m.tourTyped >= len(fullRunes) {
+				m.tourTyping = false
+				m.tourRunning = true
+				return m, tickTourRun()
+			}
+			return m, tickTourType()
+		}
+
+		last := len(m.steps) - 1
+		if last >= 0 {
+			m.steps[last] = Step{Bash, label, "done", Done}
+		}
+		if strings.TrimSpace(item.Note) != "" {
+			m.steps = append(m.steps, Step{None, item.Note, "", Info})
+		}
+		for _, line := range item.MockOutput {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			m.steps = append(m.steps, Step{None, "  "+line, "", Info})
+		}
+		m.steps = append(m.steps, Step{None, "", "", Info})
+		m.tourIndex++
+		m.tourRunning = false
+		m.tourTyping = false
+		m.tourTyped = 0
+		m.scrollToBottom()
+		if m.tourIndex >= len(quickTour) {
+			m.tourSummary = "Welcome to Co-one AI Lab. You're all set."
+			m.steps = append(m.steps, Step{None, "Welcome to Co-one AI Lab. You're all set.", "", Info})
+			m.scrollToBottom()
+			return m, tickTourFinish()
+		}
+		m.tourSummary = fmt.Sprintf("Up next: %s", quickTour[m.tourIndex].Note)
+		return m, tickTourGap()
+
+	case tourFinishMsg:
+		m.running = false
+		m.tourActive = false
+		m.tourRunning = false
+		m.tourTyping = false
+		m.tourTyped = 0
+		m.tourStepIdx = -1
+		m.tourSummary = ""
+		m.tourIndex = 0
+		m.prompt = "Commands"
+		m.authStatus = currentAuthStatus()
+		m.orgStatus = currentOrgStatus()
+		m.projectStatus = currentProjectStatus()
+		m.loggedIn = isLoggedIn()
+		m.placeholder.commands = placeholderCommands(m.loggedIn)
+		m.steps = welcomeSteps(m.loggedIn)
+		m.scrollOffset = 0
+		return m, tea.ClearScreen
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width - 2
@@ -96,6 +258,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case tea.KeyMsg:
+		if m.tourActive {
+			switch msg.Type {
+			case tea.KeyCtrlC, tea.KeyEsc:
+				return m, tea.Quit
+			default:
+				return m, nil
+			}
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
@@ -115,7 +286,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if cmdText == "clear" {
 				m.prompt = "Commands"
-				m.steps = []Step{}
+				m.steps = welcomeSteps(m.loggedIn)
 				m.scrollOffset = 0
 				return m, tea.ClearScreen
 			}
@@ -130,6 +301,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.steps = welcomeSteps(m.loggedIn)
 				m.scrollOffset = 0
 				return m, tea.ClearScreen
+			}
+			if strings.EqualFold(cmdText, "open guide tour") || strings.EqualFold(cmdText, "tour") {
+				m.running = true
+				m.tourActive = true
+				m.tourRunning = false
+				m.tourTyping = false
+				m.tourTyped = 0
+				m.tourStepIdx = -1
+				m.tourSummary = "Starting quick tour..."
+				m.tourIndex = 0
+				m.prompt = "TOUR MODE"
+				m.steps = []Step{
+					{None, "TOUR MODE", "", Info},
+					{None, "", "", Info},
+				}
+				m.scrollOffset = 0
+				return m, tickTourRun()
 			}
 
 			m.running = true
@@ -210,7 +398,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	input := m.input
-	if m.running {
+	if m.tourActive {
+		if v := m.tourInputText(); v != "" {
+			input = v
+		} else {
+			input = "tour mode..."
+		}
+	} else if m.running {
 		input = "running..."
 	} else if input == "" {
 		input = m.placeholder.current()
@@ -220,12 +414,38 @@ func (m model) View() string {
 	return padToHeight(view, m.height)
 }
 
+func (m model) tourInputText() string {
+	if !m.tourActive || m.tourIndex < 0 {
+		return ""
+	}
+	if m.tourIndex >= len(quickTour) {
+		return m.tourSummary
+	}
+	full := "heimdal " + quickTour[m.tourIndex].Command
+	if m.tourTyping {
+		r := []rune(full)
+		n := m.tourTyped
+		if n < 0 {
+			n = 0
+		}
+		if n > len(r) {
+			n = len(r)
+		}
+		return string(r[:n])
+	}
+	if m.tourRunning {
+		return full
+	}
+	return m.tourSummary
+}
+
 func (m model) currentPane(input string) ClaudePane {
 	return ClaudePane{
 		Version:       m.version,
 		AuthStatus:    m.authStatus,
 		OrgStatus:     m.orgStatus,
 		ProjectStatus: m.projectStatus,
+		TourMode:      m.tourActive,
 		Prompt:        m.prompt,
 		Steps:         m.steps,
 		InputValue:    input,
@@ -365,6 +585,51 @@ func tickPlaceholder() tea.Cmd {
 	})
 }
 
+func tickTourRun() tea.Cmd {
+	return tea.Tick(tourRunDelay, func(time.Time) tea.Msg {
+		return tourTickMsg{}
+	})
+}
+
+func tickTourType() tea.Cmd {
+	return tea.Tick(tourTypeDelay, func(time.Time) tea.Msg {
+		return tourTickMsg{}
+	})
+}
+
+func tickTourGap() tea.Cmd {
+	return tea.Tick(tourGapDelay, func(time.Time) tea.Msg {
+		return tourTickMsg{}
+	})
+}
+
+func tickTourFinish() tea.Cmd {
+	return tea.Tick(tourFinishDelay, func(time.Time) tea.Msg {
+		return tourFinishMsg{}
+	})
+}
+
+func tourProgressLine(current, total int) string {
+	if total <= 0 {
+		return ""
+	}
+	if current < 0 {
+		current = 0
+	}
+	if current > total {
+		current = total
+	}
+	const width = 12
+	filled := (current * width) / total
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return fmt.Sprintf("Progress: [%s%s] %d/%d", strings.Repeat("=", filled), strings.Repeat("-", width-filled), current, total)
+}
+
 func currentAuthStatus() string {
 	ts, err := auth.LoadToken()
 	if err != nil || ts == nil || strings.TrimSpace(ts.Email) == "" {
@@ -411,6 +676,7 @@ func welcomeSteps(loggedIn bool) []Step {
 func placeholderCommands(loggedIn bool) []string {
 	if !loggedIn {
 		return []string{
+			"open tour",
 			"auth login",
 			"org list",
 			"org use <org-id>",
@@ -422,6 +688,7 @@ func placeholderCommands(loggedIn bool) []string {
 		}
 	}
 	return []string{
+		"open tour",
 		"org current",
 		"use <project-id>",
 		"init --integration <id>",

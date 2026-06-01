@@ -26,6 +26,46 @@ func bold(c lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(c).Bold(true)
 }
 
+func boxWithTitleColor(lines []string, title string, totalWidth int, borderColor lipgloss.Color) string {
+	if totalWidth < 20 {
+		totalWidth = 20
+	}
+	bdr := fg(borderColor)
+	innerW := totalWidth - 2
+
+	var topLine string
+	if title == "" {
+		topLine = bdr.Render("┌" + strings.Repeat("─", innerW) + "┐")
+	} else {
+		styledTitle := bold(borderColor).Render(title)
+		prefix := "─ "
+		suffix := " "
+		used := lipgloss.Width(prefix + title + suffix)
+		filler := innerW - used
+		if filler < 0 {
+			filler = 0
+		}
+		topLine = bdr.Render("┌"+prefix) + styledTitle +
+			bdr.Render(suffix+strings.Repeat("─", filler)+"┐")
+	}
+
+	var midLines []string
+	for _, line := range lines {
+		vw := lipgloss.Width(line)
+		pad := innerW - 2 - vw
+		if pad < 0 {
+			pad = 0
+		}
+		midLines = append(midLines, bdr.Render("│")+" "+line+strings.Repeat(" ", pad)+" "+bdr.Render("│"))
+	}
+
+	bottomLine := bdr.Render("└" + strings.Repeat("─", innerW) + "┘")
+	all := []string{topLine}
+	all = append(all, midLines...)
+	all = append(all, bottomLine)
+	return strings.Join(all, "\n")
+}
+
 // ─── Hexagon logo ───────────────────────────────────────────────────────────
 
 // func robotLines() []string {
@@ -113,43 +153,7 @@ func robotLines() []string {
 // ─── ANSI-safe bordered box ──────────────────────────────────────────────────
 
 func boxWithTitle(lines []string, title string, totalWidth int) string {
-	if totalWidth < 20 {
-		totalWidth = 20
-	}
-	bdr := fg(colOrange)
-	innerW := totalWidth - 2
-
-	var topLine string
-	if title == "" {
-		topLine = bdr.Render("┌" + strings.Repeat("─", innerW) + "┐")
-	} else {
-		styledTitle := bold(colOrange).Render(title)
-		prefix := "─ "
-		suffix := " "
-		used := lipgloss.Width(prefix + title + suffix)
-		filler := innerW - used
-		if filler < 0 {
-			filler = 0
-		}
-		topLine = bdr.Render("┌"+prefix) + styledTitle +
-			bdr.Render(suffix+strings.Repeat("─", filler)+"┐")
-	}
-
-	var midLines []string
-	for _, line := range lines {
-		vw := lipgloss.Width(line)
-		pad := innerW - 2 - vw
-		if pad < 0 {
-			pad = 0
-		}
-		midLines = append(midLines, bdr.Render("│")+" "+line+strings.Repeat(" ", pad)+" "+bdr.Render("│"))
-	}
-
-	bottomLine := bdr.Render("└" + strings.Repeat("─", innerW) + "┘")
-	all := []string{topLine}
-	all = append(all, midLines...)
-	all = append(all, bottomLine)
-	return strings.Join(all, "\n")
+	return boxWithTitleColor(lines, title, totalWidth, colOrange)
 }
 
 // ─── Tool & Step ────────────────────────────────────────────────────────────
@@ -249,6 +253,7 @@ type ClaudePane struct {
 	AuthStatus    string
 	OrgStatus     string
 	ProjectStatus string
+	TourMode      bool
 	Prompt        string
 	Steps         []Step
 	InputValue    string
@@ -293,13 +298,17 @@ func (p ClaudePane) Render() string {
 	}
 
 	inputText := p.InputValue
+	borderColor := colOrange
+	if p.TourMode {
+		borderColor = lipgloss.Color("#ffe46b")
+	}
 	if p.InputIsHint {
 		inputText = fg(colDim).Render(inputText)
 	} else {
 		inputText = fg(colWhite).Render(inputText)
 	}
-	inputLine := bold(colOrange).Render("> ") + inputText + bold(colOrange).Render("█")
-	inputBox := boxWithTitle([]string{inputLine}, "", innerW)
+	inputLine := bold(borderColor).Render("> ") + inputText + bold(borderColor).Render("█")
+	inputBox := boxWithTitleColor([]string{inputLine}, "", innerW, borderColor)
 
 	var outerLines []string
 	outerLines = append(outerLines, "")
@@ -308,7 +317,7 @@ func (p ClaudePane) Render() string {
 	for _, ibLine := range strings.Split(inputBox, "\n") {
 		outerLines = append(outerLines, ibLine)
 	}
-	footerText := "back/home=home  clear=clear output  quit=exit  scroll=pgup/pgdn"
+	footerText := "clear=clear output  tour=open tour  scroll=pgup/pgdn  quit=exit"
 	if totalBodyLines > bodyCapacity {
 		footerText += fmt.Sprintf("  [%d/%d]", scrollOffset+1, maxOffset+1)
 	}
@@ -316,7 +325,7 @@ func (p ClaudePane) Render() string {
 	outerLines = append(outerLines, footer)
 	outerLines = append(outerLines, "")
 
-	return boxWithTitle(outerLines, "heimdal "+p.Version, w)
+	return boxWithTitleColor(outerLines, "heimdal "+p.Version, w, borderColor)
 }
 
 func (p ClaudePane) renderBodyLines(statusLine string, bodyWidth int) []string {
