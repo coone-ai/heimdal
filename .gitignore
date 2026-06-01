@@ -1,9 +1,11 @@
 # Build outputs
 /heimdal
+/heimdal.exe
 /dist/
 /build/
 /coverage.out
 /.gocache/
+/.heimdal/
 
 # Go
 *.test

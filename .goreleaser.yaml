@@ -116,37 +116,6 @@ release:
     pip install coone-ailab-cli
     ```
 
-    Homebrew:
-    ```bash
-    brew install heimdal/tap/heimdal
-    ```
-
-# ── Homebrew Tap ──────────────────────────────────────────────────────────────
-brews:
-  - name: heimdal
-    repository:
-      owner: heimdal
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-
-    commit_author:
-      name: heimdal-bot
-      email: bot@heimdal.dev
-
-    homepage: "https://heimdal.dev"
-    description: "Heimdal CLI — AI agent test aracı"
-    license: "MIT"
-
-    # Sadece stable release'lerde tap'i güncelle.
-    skip_upload: auto
-
-    install: |
-      bin.install "heimdal"
-
-    test: |
-      system "#{bin}/heimdal", "--version"
-
 # ── install.sh için raw binary upload ────────────────────────────────────────
 # GoReleaser'ın oluşturduğu archives dışında,
 # install.sh'ın doğrudan indirebileceği düz binary'ler de yükle.
