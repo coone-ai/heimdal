@@ -24,6 +24,9 @@ if not defined VERSION (
   exit /b 1
 )
 
+set "ASSET_VERSION=%VERSION%"
+if /i "%ASSET_VERSION:~0,1%"=="v" set "ASSET_VERSION=%ASSET_VERSION:~1%"
+
 set "ARCH_RAW=%PROCESSOR_ARCHITECTURE%"
 if /i "%ARCH_RAW%"=="AMD64" (
   set "ARCH=amd64"
@@ -34,7 +37,7 @@ if /i "%ARCH_RAW%"=="AMD64" (
   exit /b 1
 )
 
-set "ARCHIVE=heimdal_%VERSION%_windows_%ARCH%.zip"
+set "ARCHIVE=heimdal_%ASSET_VERSION%_windows_%ARCH%.zip"
 set "URL=https://github.com/%HEIMDAL_REPO%/releases/download/%VERSION%/%ARCHIVE%"
 
 set "TMPDIR=%TEMP%\heimdal-install-%RANDOM%%RANDOM%"

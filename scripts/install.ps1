@@ -26,6 +26,8 @@ if (-not $Version) {
   throw "Failed to resolve release tag from GitHub."
 }
 
+$AssetVersion = if ($Version.StartsWith("v")) { $Version.Substring(1) } else { $Version }
+
 $archRaw = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 switch ($archRaw) {
   "x64" { $Arch = "amd64" }
@@ -33,7 +35,7 @@ switch ($archRaw) {
   default { throw "Unsupported architecture: $archRaw" }
 }
 
-$Archive = "heimdal_${Version}_windows_${Arch}.zip"
+$Archive = "heimdal_${AssetVersion}_windows_${Arch}.zip"
 $Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
 
 Write-Host "Downloading $Url"

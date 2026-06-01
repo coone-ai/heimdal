@@ -91,7 +91,8 @@ def _resolve_tag(repo: str) -> str:
 
 def _archive_name(tag: str, os_name: str, arch: str) -> str:
     ext = "zip" if os_name == "windows" else "tar.gz"
-    return f"heimdal_{tag}_{os_name}_{arch}.{ext}"
+    asset_version = tag[1:] if tag.startswith("v") else tag
+    return f"heimdal_{asset_version}_{os_name}_{arch}.{ext}"
 
 
 def _download(url: str, dest: Path, timeout: int) -> None:
@@ -120,7 +121,8 @@ def _parse_checksum_file(checksum_file: Path, archive_name: str) -> Optional[str
 
 
 def _verify_checksum_if_available(repo: str, tag: str, archive_name: str, archive_path: Path) -> None:
-    checksum_name = f"heimdal_{tag}_checksums.txt"
+    asset_version = tag[1:] if tag.startswith("v") else tag
+    checksum_name = f"heimdal_{asset_version}_checksums.txt"
     checksum_url = f"https://github.com/{repo}/releases/download/{tag}/{checksum_name}"
     with tempfile.TemporaryDirectory(prefix="coone-ailab-cli-checksum-") as td:
         checksum_path = Path(td) / checksum_name

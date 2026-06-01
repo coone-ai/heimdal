@@ -50,7 +50,8 @@ if [[ -z "${HEIMDAL_VERSION}" ]]; then
   exit 1
 fi
 
-ARCHIVE="${BINARY}_${HEIMDAL_VERSION}_${OS}_${ARCH}.tar.gz"
+ASSET_VERSION="${HEIMDAL_VERSION#v}"
+ARCHIVE="${BINARY}_${ASSET_VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${HEIMDAL_VERSION}/${ARCHIVE}"
 
 echo "Downloading ${URL}"
