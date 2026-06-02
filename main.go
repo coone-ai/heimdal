@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ai-la/cli/cmd"
 	"github.com/ai-la/cli/internal/auth"
+	"github.com/ai-la/cli/internal/config"
+	"github.com/ai-la/cli/internal/runner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -15,6 +19,7 @@ import (
 
 type model struct {
 	input         string
+	inputCursor   int
 	version       string
 	prompt        string
 	steps         []Step
@@ -36,6 +41,7 @@ type model struct {
 	tourTyped     int
 	tourStepIdx   int
 	tourSummary   string
+	activeTasks   string
 }
 
 func initialModel() model {
@@ -61,7 +67,7 @@ func initialModel() model {
 // ─── Bubble Tea interface ─────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tickPlaceholder()
+	return tea.Batch(tickPlaceholder(), fetchActiveTasks())
 }
 
 type commandDoneMsg struct {
@@ -70,6 +76,9 @@ type commandDoneMsg struct {
 }
 
 type placeholderTickMsg struct{}
+type activeTasksMsg struct {
+	summary string
+}
 type tourTickMsg struct{}
 type tourFinishMsg struct{}
 
@@ -132,6 +141,7 @@ const (
 	tourRunDelay    = 700 * time.Millisecond
 	tourGapDelay    = 4 * time.Second
 	tourFinishDelay = 8 * time.Second
+	activeTaskDelay = 10 * time.Second
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -141,6 +151,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.placeholder.advance()
 		}
 		return m, tickPlaceholder()
+
+	case activeTasksMsg:
+		m.activeTasks = msg.summary
+		return m, tickActiveTasks()
 
 	case tourTickMsg:
 		if !m.tourActive {
@@ -198,7 +212,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			m.steps = append(m.steps, Step{None, "  "+line, "", Info})
+			m.steps = append(m.steps, Step{None, "  " + line, "", Info})
 		}
 		m.steps = append(m.steps, Step{None, "", "", Info})
 		m.tourIndex++
@@ -277,6 +291,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmdText := strings.TrimSpace(m.input)
 			m.input = ""
+			m.inputCursor = 0
 			if cmdText == "" {
 				break
 			}
@@ -357,23 +372,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollBy(m.pageSize())
 			return m, nil
 
-		case tea.KeyBackspace, tea.KeyDelete:
+		case tea.KeyLeft:
 			if m.running {
 				return m, nil
 			}
-			if len(m.input) > 0 {
-				runes := []rune(m.input)
-				m.input = string(runes[:len(runes)-1])
+			m.moveInputCursor(-1)
+
+		case tea.KeyRight:
+			if m.running {
+				return m, nil
 			}
+			m.moveInputCursor(1)
+
+		case tea.KeyHome:
+			if m.running {
+				return m, nil
+			}
+			m.inputCursor = 0
+
+		case tea.KeyEnd:
+			if m.running {
+				return m, nil
+			}
+			m.inputCursor = len([]rune(m.input))
+
+		case tea.KeyBackspace:
+			if m.running {
+				return m, nil
+			}
+			m.deleteBeforeCursor()
+
+		case tea.KeyDelete:
+			if m.running {
+				return m, nil
+			}
+			m.deleteAtCursor()
 
 		default:
 			if m.running {
 				return m, nil
 			}
 			if msg.Type == tea.KeyRunes {
-				m.input += string(msg.Runes)
+				m.insertInput(string(msg.Runes))
 			} else if msg.Type == tea.KeySpace {
-				m.input += " "
+				m.insertInput(" ")
 			}
 		}
 
@@ -398,18 +440,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	input := m.input
+	inputCursor := m.inputCursor
 	if m.tourActive {
 		if v := m.tourInputText(); v != "" {
 			input = v
 		} else {
 			input = "tour mode..."
 		}
+		inputCursor = len([]rune(input))
 	} else if m.running {
 		input = "running..."
+		inputCursor = len([]rune(input))
 	} else if input == "" {
 		input = m.placeholder.current()
+		inputCursor = len([]rune(input))
+	} else {
+		inputCursor = clampInt(inputCursor, 0, len([]rune(input)))
 	}
-	pane := m.currentPane(input)
+	pane := m.currentPane(input, inputCursor)
 	view := "\n" + pane.Render() + "\n"
 	return padToHeight(view, m.height)
 }
@@ -439,7 +487,7 @@ func (m model) tourInputText() string {
 	return m.tourSummary
 }
 
-func (m model) currentPane(input string) ClaudePane {
+func (m model) currentPane(input string, inputCursor int) ClaudePane {
 	return ClaudePane{
 		Version:       m.version,
 		AuthStatus:    m.authStatus,
@@ -449,10 +497,12 @@ func (m model) currentPane(input string) ClaudePane {
 		Prompt:        m.prompt,
 		Steps:         m.steps,
 		InputValue:    input,
+		InputCursor:   inputCursor,
 		InputIsHint:   !m.running && m.input == "",
 		Width:         m.width,
 		Height:        m.height,
 		ScrollOffset:  m.scrollOffset,
+		ActiveTasks:   m.activeTasks,
 	}
 }
 
@@ -478,6 +528,7 @@ func (m *model) historyPrev() {
 	}
 	if m.historyIdx >= 0 && m.historyIdx < len(m.history) {
 		m.input = m.history[m.historyIdx]
+		m.inputCursor = len([]rune(m.input))
 	}
 }
 
@@ -488,10 +539,54 @@ func (m *model) historyNext() {
 	if m.historyIdx < len(m.history)-1 {
 		m.historyIdx++
 		m.input = m.history[m.historyIdx]
+		m.inputCursor = len([]rune(m.input))
 		return
 	}
 	m.historyIdx = len(m.history)
 	m.input = ""
+	m.inputCursor = 0
+}
+
+func (m *model) insertInput(value string) {
+	r := []rune(m.input)
+	m.inputCursor = clampInt(m.inputCursor, 0, len(r))
+	insert := []rune(value)
+	next := make([]rune, 0, len(r)+len(insert))
+	next = append(next, r[:m.inputCursor]...)
+	next = append(next, insert...)
+	next = append(next, r[m.inputCursor:]...)
+	m.input = string(next)
+	m.inputCursor += len(insert)
+}
+
+func (m *model) deleteBeforeCursor() {
+	r := []rune(m.input)
+	m.inputCursor = clampInt(m.inputCursor, 0, len(r))
+	if m.inputCursor == 0 {
+		return
+	}
+	next := make([]rune, 0, len(r)-1)
+	next = append(next, r[:m.inputCursor-1]...)
+	next = append(next, r[m.inputCursor:]...)
+	m.input = string(next)
+	m.inputCursor--
+}
+
+func (m *model) deleteAtCursor() {
+	r := []rune(m.input)
+	m.inputCursor = clampInt(m.inputCursor, 0, len(r))
+	if m.inputCursor >= len(r) {
+		return
+	}
+	next := make([]rune, 0, len(r)-1)
+	next = append(next, r[:m.inputCursor]...)
+	next = append(next, r[m.inputCursor+1:]...)
+	m.input = string(next)
+}
+
+func (m *model) moveInputCursor(delta int) {
+	r := []rune(m.input)
+	m.inputCursor = clampInt(m.inputCursor+delta, 0, len(r))
 }
 
 func (m *model) pageSize() int {
@@ -517,14 +612,24 @@ func (m *model) clampScroll() {
 	if m.scrollOffset < 0 {
 		m.scrollOffset = 0
 	}
-	max := m.currentPane(m.input).MaxScrollOffset()
+	max := m.currentPane(m.input, m.inputCursor).MaxScrollOffset()
 	if m.scrollOffset > max {
 		m.scrollOffset = max
 	}
 }
 
 func (m *model) scrollToBottom() {
-	m.scrollOffset = m.currentPane(m.input).MaxScrollOffset()
+	m.scrollOffset = m.currentPane(m.input, m.inputCursor).MaxScrollOffset()
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func padToHeight(view string, height int) string {
@@ -585,6 +690,19 @@ func tickPlaceholder() tea.Cmd {
 	})
 }
 
+func tickActiveTasks() tea.Cmd {
+	return tea.Tick(activeTaskDelay, func(time.Time) tea.Msg {
+		return fetchActiveTasks()()
+	})
+}
+
+func fetchActiveTasks() tea.Cmd {
+	return func() tea.Msg {
+		summary := activeTaskSummary()
+		return activeTasksMsg{summary: summary}
+	}
+}
+
 func tickTourRun() tea.Cmd {
 	return tea.Tick(tourRunDelay, func(time.Time) tea.Msg {
 		return tourTickMsg{}
@@ -636,6 +754,67 @@ func currentAuthStatus() string {
 		return "Not logged in"
 	}
 	return "Logged in: " + strings.TrimSpace(ts.Email)
+}
+
+func activeTaskSummary() string {
+	if !isLoggedIn() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	client, err := runner.NewClientFromToken(&config.Config{})
+	if err != nil {
+		return ""
+	}
+	resp, err := client.ListJobs(ctx, "", "", "", 100)
+	if err != nil {
+		return ""
+	}
+
+	count := 0
+	kindCounts := map[string]int{}
+	for _, job := range resp.Jobs {
+		status := strings.ToLower(strings.TrimSpace(job.Status))
+		if status != "running" && status != "pending" {
+			continue
+		}
+		count++
+		label := strings.TrimSpace(job.JobType)
+		if label == "" {
+			label = strings.TrimSpace(job.EntityType)
+		}
+		if label == "" {
+			label = "task"
+		}
+		kindCounts[label]++
+	}
+	if count == 0 {
+		return ""
+	}
+
+	label := "active tasks"
+	if count == 1 {
+		label = "active task"
+	}
+	kinds := make([]string, 0, len(kindCounts))
+	for kind := range kindCounts {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		n := kindCounts[kind]
+		if n > 1 {
+			parts = append(parts, fmt.Sprintf("%s=%d", kind, n))
+		} else {
+			parts = append(parts, kind)
+		}
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%s: %d", label, count)
+	}
+	return fmt.Sprintf("%s: %d (%s)", label, count, strings.Join(parts, ", "))
 }
 
 func welcomeSteps(loggedIn bool) []Step {

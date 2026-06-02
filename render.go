@@ -257,10 +257,12 @@ type ClaudePane struct {
 	Prompt        string
 	Steps         []Step
 	InputValue    string
+	InputCursor   int
 	InputIsHint   bool
 	Width         int
 	Height        int
 	ScrollOffset  int
+	ActiveTasks   string
 }
 
 func (p ClaudePane) Render() string {
@@ -297,17 +299,15 @@ func (p ClaudePane) Render() string {
 		bodyLines = bodyLines[scrollOffset : scrollOffset+bodyCapacity]
 	}
 
-	inputText := p.InputValue
 	borderColor := colOrange
 	if p.TourMode {
 		borderColor = lipgloss.Color("#ffe46b")
 	}
-	if p.InputIsHint {
-		inputText = fg(colDim).Render(inputText)
-	} else {
-		inputText = fg(colWhite).Render(inputText)
+	inputCapacity := innerW - 8
+	if inputCapacity < 4 {
+		inputCapacity = 4
 	}
-	inputLine := bold(borderColor).Render("> ") + inputText + bold(borderColor).Render("█")
+	inputLine := renderInputLine(p.InputValue, p.InputCursor, inputCapacity, borderColor, p.InputIsHint)
 	inputBox := boxWithTitleColor([]string{inputLine}, "", innerW, borderColor)
 
 	var outerLines []string
@@ -321,11 +321,63 @@ func (p ClaudePane) Render() string {
 	if totalBodyLines > bodyCapacity {
 		footerText += fmt.Sprintf("  [%d/%d]", scrollOffset+1, maxOffset+1)
 	}
+	if strings.TrimSpace(p.ActiveTasks) != "" {
+		footerText += "  " + strings.TrimSpace(p.ActiveTasks)
+	}
 	footer := fg(colDim).Render(footerText)
 	outerLines = append(outerLines, footer)
 	outerLines = append(outerLines, "")
 
 	return boxWithTitleColor(outerLines, "heimdal "+p.Version, w, borderColor)
+}
+
+func renderInputLine(value string, cursor int, capacity int, borderColor lipgloss.Color, isHint bool) string {
+	r := []rune(value)
+	cursor = clampRenderInt(cursor, 0, len(r))
+	if capacity < 1 {
+		capacity = 1
+	}
+
+	start := 0
+	if cursor >= capacity {
+		start = cursor - capacity + 1
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + capacity
+	if end > len(r) {
+		end = len(r)
+	}
+
+	visible := r[start:end]
+	visibleCursor := cursor - start
+	if visibleCursor < 0 {
+		visibleCursor = 0
+	}
+	if visibleCursor > len(visible) {
+		visibleCursor = len(visible)
+	}
+
+	textStyle := fg(colWhite)
+	if isHint {
+		textStyle = fg(colDim)
+	}
+	prefix := bold(borderColor).Render("> ")
+	before := textStyle.Render(string(visible[:visibleCursor]))
+	after := textStyle.Render(string(visible[visibleCursor:]))
+	cursorBlock := bold(borderColor).Render("█")
+	return prefix + before + cursorBlock + after
+}
+
+func clampRenderInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func (p ClaudePane) renderBodyLines(statusLine string, bodyWidth int) []string {

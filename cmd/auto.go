@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ai-la/cli/internal/config"
 	"github.com/ai-la/cli/internal/output"
@@ -513,6 +514,129 @@ Use this command to find knowledge base IDs for tests that need KB context
 	}
 	cmd.Flags().StringVar(&configPath, "config", "./heimdal.yaml", "Config file path")
 	cmd.Flags().StringVar(&projectID, "project", "", "Project ID")
+	cmd.AddCommand(knowledgeBasesUploadCmd())
+	cmd.AddCommand(knowledgeBasesStatusCmd())
+	return cmd
+}
+
+func knowledgeBasesUploadCmd() *cobra.Command {
+	var configPath, projectID, name, description, sourceLanguage, targetLanguage string
+	var watch bool
+	cmd := &cobra.Command{
+		Use:   "upload <file> [file...]",
+		Short: "Upload local files as a project knowledge base",
+		Long: `Upload one or more local files as a project knowledge base.
+
+Supported files: .xlsx, .csv, .pdf, .docx, .txt.
+Processing continues asynchronously after upload; use --watch or
+` + "`heimdal knowledge-bases status <kb-id>`" + ` to track progress.`,
+		Example: strings.TrimSpace(`
+  heimdal knowledge-bases upload ./faq.xlsx --name "Support KB"
+  heimdal knowledge-bases upload ./faq.xlsx ./policy.pdf --name "Retail Banking KB" --project <project-id> --watch
+`),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("at least one file is required")
+			}
+			for _, filePath := range args {
+				if _, err := os.Stat(filePath); err != nil {
+					return fmt.Errorf("file not found: %s", filePath)
+				}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !hasActiveOrgContext() {
+				return fmt.Errorf("no active organization selected; run `heimdal org list` and `heimdal org use <org-id>` first")
+			}
+			cfg, client, err := configAndClient(configPath)
+			if err != nil {
+				return err
+			}
+			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
+			if err != nil {
+				return err
+			}
+			if projectID == "" {
+				return fmt.Errorf("project id is required; use `heimdal use <project-id>` or pass `--project`")
+			}
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return fmt.Errorf("knowledge base name is required; pass `--name`")
+			}
+
+			resp, err := client.UploadKnowledgeBase(context.Background(), runner.KnowledgeBaseUploadRequest{
+				FilePaths:      args,
+				Name:           name,
+				Description:    strings.TrimSpace(description),
+				ProjectID:      projectID,
+				SourceLanguage: strings.TrimSpace(sourceLanguage),
+				TargetLanguage: strings.TrimSpace(targetLanguage),
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Println("Knowledge base upload started")
+			fmt.Printf("%s  %s  status=%s items=%d\n", resp.ID, resp.Name, fallback(resp.Status, "pending"), resp.ItemCount)
+			fmt.Println("Track progress:")
+			fmt.Printf("  heimdal knowledge-bases status %s --watch\n", resp.ID)
+			if watch {
+				fmt.Println()
+				return watchKnowledgeBaseJob(client, resp.ID)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&configPath, "config", "./heimdal.yaml", "Config file path")
+	cmd.Flags().StringVar(&projectID, "project", "", "Project ID")
+	cmd.Flags().StringVar(&name, "name", "", "Knowledge base name")
+	cmd.Flags().StringVar(&description, "description", "", "Knowledge base description")
+	cmd.Flags().StringVar(&sourceLanguage, "source-language", "tr", "Source language")
+	cmd.Flags().StringVar(&targetLanguage, "target-language", "en", "Target language")
+	cmd.Flags().BoolVar(&watch, "watch", false, "Watch processing progress until completion")
+	return cmd
+}
+
+func knowledgeBasesStatusCmd() *cobra.Command {
+	var configPath, projectID string
+	var watch bool
+	cmd := &cobra.Command{
+		Use:   "status <knowledge-base-id>",
+		Short: "Show knowledge base processing status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !hasActiveOrgContext() {
+				return fmt.Errorf("no active organization selected; run `heimdal org list` and `heimdal org use <org-id>` first")
+			}
+			cfg, client, err := configAndClient(configPath)
+			if err != nil {
+				return err
+			}
+			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
+			if err != nil {
+				return err
+			}
+			kbID, err := resolveKnowledgeBaseIDPrefixWithClient(client, projectID, args[0])
+			if err != nil {
+				return err
+			}
+			if watch {
+				return watchKnowledgeBaseJob(client, kbID)
+			}
+			detail, err := client.GetJobByEntity(context.Background(), "knowledge_base", kbID)
+			if err != nil {
+				return err
+			}
+			printJobDetail(detail)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&configPath, "config", "./heimdal.yaml", "Config file path")
+	cmd.Flags().StringVar(&projectID, "project", "", "Project ID")
+	cmd.Flags().BoolVar(&watch, "watch", false, "Watch processing progress until completion")
 	return cmd
 }
 
@@ -598,6 +722,101 @@ func resolveIntegrationIDPrefixWithClient(client *runner.HeimdalClient, projectI
 		return "", fmt.Errorf("ambiguous integration id prefix: %s", input)
 	}
 	return matches[0], nil
+}
+
+func resolveKnowledgeBaseIDPrefixWithClient(client *runner.HeimdalClient, projectID, input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("knowledge base id cannot be empty")
+	}
+	if len(input) == 36 {
+		return input, nil
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return "", fmt.Errorf("project id is required to resolve a knowledge base prefix; use `heimdal use <project-id>` or pass `--project`")
+	}
+	resp, err := client.ListKnowledgeBases(context.Background(), projectID)
+	if err != nil {
+		return "", err
+	}
+	matches := make([]string, 0, 2)
+	for _, kb := range resp.KnowledgeBases {
+		id := strings.TrimSpace(kb.ID)
+		if id == input || strings.HasPrefix(id, input) {
+			matches = append(matches, id)
+		}
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("knowledge base not found: %s", input)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous knowledge base id prefix: %s", input)
+	}
+	return matches[0], nil
+}
+
+func watchKnowledgeBaseJob(client *runner.HeimdalClient, kbID string) error {
+	for {
+		detail, err := client.GetJobByEntity(context.Background(), "knowledge_base", kbID)
+		if err != nil {
+			return err
+		}
+		printJobDetail(detail)
+		status := strings.ToLower(strings.TrimSpace(detail.Job.Status))
+		if status == "completed" || status == "failed" || status == "cancelled" {
+			return nil
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func printJobDetail(detail *runner.JobDetailResponse) {
+	job := detail.Job
+	fmt.Printf("Job:      %s\n", shortID(job.ID))
+	fmt.Printf("KB:       %s\n", shortID(job.EntityID))
+	fmt.Printf("Status:   %s\n", fallback(job.Status, "unknown"))
+	fmt.Printf("Progress: %.0f%%", job.Progress)
+	if job.TotalItems > 0 {
+		fmt.Printf("  items=%d/%d", job.ProcessedItems, job.TotalItems)
+	}
+	fmt.Println()
+	if strings.TrimSpace(job.CurrentStep) != "" {
+		fmt.Printf("Current:  %s\n", job.CurrentStep)
+	}
+	if strings.TrimSpace(job.ErrorMessage) != "" {
+		fmt.Printf("Error:    %s\n", job.ErrorMessage)
+	}
+	if len(detail.Steps) > 0 {
+		fmt.Println("Steps:")
+		start := 0
+		if len(detail.Steps) > 5 {
+			start = len(detail.Steps) - 5
+		}
+		for _, step := range detail.Steps[start:] {
+			label := strings.TrimSpace(step.StepName)
+			if label == "" {
+				label = "step"
+			}
+			fmt.Printf("  %s  %s\n", fallback(step.Status, "unknown"), label)
+		}
+	}
+	fmt.Println()
+}
+
+func shortID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 15 {
+		return id
+	}
+	return id[:7] + "..." + id[len(id)-6:]
+}
+
+func fallback(value, fallbackValue string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallbackValue
+	}
+	return strings.TrimSpace(value)
 }
 
 func buildIntegrationConfigCreateRequest(intCfg config.IntegrationConfig, projectID string) (runner.IntegrationConfigCreateRequest, error) {

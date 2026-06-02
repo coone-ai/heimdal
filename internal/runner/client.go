@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -92,6 +95,53 @@ func (c *HeimdalClient) do(ctx context.Context, method, path string, body any, o
 	if out != nil {
 		if err := json.Unmarshal(respBytes, out); err != nil {
 			return fmt.Errorf("response parse error (%s %s): %w; body=%s", method, strings.TrimRight(c.baseURL, "/")+path, err, string(respBytes))
+		}
+	}
+
+	return nil
+}
+
+func (c *HeimdalClient) doMultipart(ctx context.Context, path string, build func(*multipart.Writer) error, out any) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := build(writer); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close multipart body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.baseURL, "/")+path, &body)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Source", "cli")
+	if c.organizationID != "" {
+		req.Header.Set("X-Organization-Id", c.organizationID)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("http client: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	if out != nil {
+		if err := json.Unmarshal(respBytes, out); err != nil {
+			return fmt.Errorf("response parse error (POST %s): %w; body=%s", strings.TrimRight(c.baseURL, "/")+path, err, string(respBytes))
 		}
 	}
 
@@ -239,6 +289,93 @@ func (c *HeimdalClient) ListKnowledgeBases(ctx context.Context, projectID string
 		path += "?" + encoded
 	}
 	var resp KnowledgeBasesResponse
+	if err := c.get(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *HeimdalClient) UploadKnowledgeBase(ctx context.Context, req KnowledgeBaseUploadRequest) (*KnowledgeBaseSummary, error) {
+	var resp KnowledgeBaseSummary
+	err := c.doMultipart(ctx, "/api/knowledge-base/upload", func(w *multipart.Writer) error {
+		for _, filePath := range req.FilePaths {
+			if strings.TrimSpace(filePath) == "" {
+				continue
+			}
+			file, err := os.Open(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to open %s: %w", filePath, err)
+			}
+			defer file.Close()
+
+			part, err := w.CreateFormFile("files", filepath.Base(filePath))
+			if err != nil {
+				return fmt.Errorf("failed to attach %s: %w", filePath, err)
+			}
+			if _, err := io.Copy(part, file); err != nil {
+				return fmt.Errorf("failed to read %s: %w", filePath, err)
+			}
+		}
+		if err := w.WriteField("name", req.Name); err != nil {
+			return err
+		}
+		if req.Description != "" {
+			if err := w.WriteField("description", req.Description); err != nil {
+				return err
+			}
+		}
+		if err := w.WriteField("project_id", req.ProjectID); err != nil {
+			return err
+		}
+		if req.SourceLanguage != "" {
+			if err := w.WriteField("source_language", req.SourceLanguage); err != nil {
+				return err
+			}
+		}
+		if req.TargetLanguage != "" {
+			if err := w.WriteField("target_language", req.TargetLanguage); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *HeimdalClient) GetJobByEntity(ctx context.Context, entityType, entityID string) (*JobDetailResponse, error) {
+	q := url.Values{}
+	q.Set("entity_type", entityType)
+	q.Set("entity_id", entityID)
+	path := "/api/jobs?" + q.Encode()
+	var resp JobDetailResponse
+	if err := c.get(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *HeimdalClient) ListJobs(ctx context.Context, status, entityType, projectID string, limit int) (*JobsResponse, error) {
+	q := url.Values{}
+	if strings.TrimSpace(status) != "" {
+		q.Set("status", strings.TrimSpace(status))
+	}
+	if strings.TrimSpace(entityType) != "" {
+		q.Set("entity_type", strings.TrimSpace(entityType))
+	}
+	if strings.TrimSpace(projectID) != "" {
+		q.Set("project_id", strings.TrimSpace(projectID))
+	}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	path := "/api/jobs/list"
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var resp JobsResponse
 	if err := c.get(ctx, path, &resp); err != nil {
 		return nil, err
 	}
@@ -413,12 +550,60 @@ type KnowledgeBasesResponse struct {
 }
 
 type KnowledgeBaseSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	IsDefault bool   `json:"is_default"`
-	ItemCount int    `json:"item_count"`
-	CreatedAt string `json:"created_at"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Status             string `json:"status"`
+	IsDefault          bool   `json:"is_default"`
+	ItemCount          int    `json:"item_count"`
+	EmbeddingDimension int    `json:"embedding_dimension"`
+	EmbeddingModel     string `json:"embedding_model"`
+	CreatedAt          string `json:"created_at"`
+}
+
+type KnowledgeBaseUploadRequest struct {
+	FilePaths      []string
+	Name           string
+	Description    string
+	ProjectID      string
+	SourceLanguage string
+	TargetLanguage string
+}
+
+type JobDetailResponse struct {
+	Job          JobSummary     `json:"job"`
+	Steps        []JobStep      `json:"steps"`
+	UsageSummary map[string]any `json:"usage_summary"`
+}
+
+type JobsResponse struct {
+	Jobs  []JobSummary `json:"jobs"`
+	Total int          `json:"total"`
+}
+
+type JobSummary struct {
+	ID             string  `json:"id"`
+	JobType        string  `json:"job_type"`
+	EntityType     string  `json:"entity_type"`
+	EntityID       string  `json:"entity_id"`
+	Status         string  `json:"status"`
+	Progress       float64 `json:"progress"`
+	CurrentStep    string  `json:"current_step"`
+	TotalItems     int     `json:"total_items"`
+	ProcessedItems int     `json:"processed_items"`
+	ErrorMessage   string  `json:"error_message"`
+	CreatedAt      string  `json:"created_at"`
+	StartedAt      string  `json:"started_at"`
+	CompletedAt    string  `json:"completed_at"`
+}
+
+type JobStep struct {
+	ID           string  `json:"id"`
+	StepName     string  `json:"step_name"`
+	Status       string  `json:"status"`
+	Progress     float64 `json:"progress"`
+	StartedAt    string  `json:"started_at"`
+	CompletedAt  string  `json:"completed_at"`
+	ErrorMessage string  `json:"error_message"`
 }
 
 type IntegrationsResponse struct {

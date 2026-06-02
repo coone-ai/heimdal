@@ -32,6 +32,7 @@ func Dispatch(input string) (CommandResult, bool) {
 	if args[0] == "help" || args[0] == "?" {
 		args = []string{"--help"}
 	}
+	args = removeFlag(args, "--watch")
 	if len(args) > 0 && args[0] == "init" && !hasAnyFlag(args[1:]) {
 		return CommandResult{
 			Prompt: input,
@@ -122,6 +123,17 @@ func hasAnyFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+func removeFlag(args []string, flag string) []string {
+	clean := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == flag {
+			continue
+		}
+		clean = append(clean, a)
+	}
+	return clean
 }
 
 func parseCommand(input string) []string {
