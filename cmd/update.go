@@ -82,6 +82,13 @@ func DisplayVersion() string {
 }
 
 func LatestReleaseTag(ctx context.Context) (string, error) {
+	if tag, err := latestReleaseTagFromAPI(ctx); err == nil && tag != "" {
+		return tag, nil
+	}
+	return latestReleaseTagFromRedirect(ctx)
+}
+
+func latestReleaseTagFromAPI(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+heimdalRepo+"/releases/latest", nil)
 	if err != nil {
 		return "", err
@@ -103,6 +110,31 @@ func LatestReleaseTag(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to parse latest release: %w", err)
 	}
 	return strings.TrimSpace(release.TagName), nil
+}
+
+func latestReleaseTagFromRedirect(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://github.com/"+heimdalRepo+"/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "heimdal-cli/"+DisplayVersion())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to check latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("failed to check latest release: HTTP %d", resp.StatusCode)
+	}
+
+	parts := strings.Split(strings.Trim(resp.Request.URL.Path, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "tag" {
+			return strings.TrimSpace(parts[i+1]), nil
+		}
+	}
+	return "", fmt.Errorf("failed to resolve latest release from %s", resp.Request.URL.String())
 }
 
 func IsNewerVersion(current, latest string) bool {

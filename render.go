@@ -326,7 +326,7 @@ func (p ClaudePane) Render() string {
 		footerText += "  " + strings.TrimSpace(p.ActiveTasks)
 	}
 	if strings.TrimSpace(p.UpdateNotice) != "" {
-		footerText += "  " + strings.TrimSpace(p.UpdateNotice)
+		footerText += "  update available: " + strings.TrimSpace(p.UpdateNotice)
 	}
 	footer := fg(colDim).Render(footerText)
 	outerLines = append(outerLines, footer)

@@ -52,14 +52,14 @@ func initialModel() model {
 	return model{
 		version:       cmd.DisplayVersion(),
 		prompt:        "Commands",
-		steps:         welcomeSteps(loggedIn),
+		steps:         welcomeSteps(loggedIn, ""),
 		width:         86,
 		authStatus:    currentAuthStatus(),
 		orgStatus:     currentOrgStatus(),
 		projectStatus: currentProjectStatus(),
 		loggedIn:      loggedIn,
 		placeholder: placeholderState{
-			commands: placeholderCommands(loggedIn),
+			commands: placeholderCommands(loggedIn, ""),
 		},
 		history:      []string{},
 		historyIdx:   0,
@@ -176,6 +176,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case updateNoticeMsg:
 		m.updateNotice = msg.notice
+		m.placeholder.commands = placeholderCommands(m.loggedIn, m.updateNotice)
+		if !m.running && !m.tourActive && m.prompt == "Commands" {
+			m.steps = welcomeSteps(m.loggedIn, m.updateNotice)
+		}
 		return m, tickUpdateNotice()
 
 	case tourTickMsg:
@@ -265,8 +269,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.orgStatus = currentOrgStatus()
 		m.projectStatus = currentProjectStatus()
 		m.loggedIn = isLoggedIn()
-		m.placeholder.commands = placeholderCommands(m.loggedIn)
-		m.steps = welcomeSteps(m.loggedIn)
+		m.placeholder.commands = placeholderCommands(m.loggedIn, m.updateNotice)
+		m.steps = welcomeSteps(m.loggedIn, m.updateNotice)
 		m.scrollOffset = 0
 		return m, tea.ClearScreen
 
@@ -288,8 +292,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.orgStatus = currentOrgStatus()
 		m.projectStatus = currentProjectStatus()
 		m.loggedIn = isLoggedIn()
-		m.placeholder.commands = placeholderCommands(m.loggedIn)
-		m.steps = postCommandSteps(msg.result.Steps, msg.ok, m.loggedIn)
+		m.placeholder.commands = placeholderCommands(m.loggedIn, m.updateNotice)
+		m.steps = postCommandSteps(msg.result.Steps, msg.ok, m.loggedIn, m.updateNotice)
 		m.scrollToBottom()
 		return m, m.afterCommandDoneCmd(msg.result.Prompt)
 
@@ -302,8 +306,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.orgStatus = currentOrgStatus()
 			m.projectStatus = currentProjectStatus()
 			m.loggedIn = isLoggedIn()
-			m.placeholder.commands = placeholderCommands(m.loggedIn)
-			m.steps = postCommandSteps(msg.event.result.Steps, msg.event.ok, m.loggedIn)
+			m.placeholder.commands = placeholderCommands(m.loggedIn, m.updateNotice)
+			m.steps = postCommandSteps(msg.event.result.Steps, msg.event.ok, m.loggedIn, m.updateNotice)
 			m.scrollToBottom()
 			return m, m.afterCommandDoneCmd(msg.event.result.Prompt)
 		}
@@ -344,19 +348,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if cmdText == "clear" {
 				m.prompt = "Commands"
-				m.steps = welcomeSteps(m.loggedIn)
+				m.steps = welcomeSteps(m.loggedIn, m.updateNotice)
 				m.scrollOffset = 0
 				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
 			if cmdText == "back" || cmdText == "home" {
 				m.prompt = "Commands"
-				m.steps = welcomeSteps(m.loggedIn)
+				m.steps = welcomeSteps(m.loggedIn, m.updateNotice)
 				m.scrollOffset = 0
 				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
 			if cmdText == "?" {
 				m.prompt = "Commands"
-				m.steps = welcomeSteps(m.loggedIn)
+				m.steps = welcomeSteps(m.loggedIn, m.updateNotice)
 				m.scrollOffset = 0
 				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
@@ -817,13 +821,13 @@ func tickUpdateNotice() tea.Cmd {
 
 func fetchUpdateNotice() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		latest, err := cmd.LatestReleaseTag(ctx)
 		if err != nil || !cmd.IsNewerVersion(cmd.Version, latest) {
 			return updateNoticeMsg{}
 		}
-		return updateNoticeMsg{notice: "update available: " + latest}
+		return updateNoticeMsg{notice: latest}
 	}
 }
 
@@ -948,7 +952,7 @@ func activeTaskSummary() string {
 	return fmt.Sprintf("%s: %d (%s)", label, count, strings.Join(parts, ", "))
 }
 
-func welcomeSteps(loggedIn bool) []Step {
+func welcomeSteps(loggedIn bool, updateNotice string) []Step {
 	steps := []Step{
 		{None, "Project Setup", "", Info},
 		{None, "init [--project <id>] [--integration <id>]", "", Info},
@@ -973,23 +977,24 @@ func welcomeSteps(loggedIn bool) []Step {
 		Step{None, "Session", "", Info},
 		Step{None, "auth login", "", Info},
 		Step{None, "auth logout", "", Info},
-		Step{None, "update", "", Info},
 		Step{None, "org list", "", Info},
 		Step{None, "org use <org-id>", "", Info},
 		Step{None, "use <project-id>", "", Info},
 	)
+	if label := updateCommandLabel(updateNotice); label != "" {
+		steps = append(steps, Step{None, label, "", Info})
+	}
 	if !loggedIn {
 		steps = append(steps, Step{None, "", "", Info}, Step{None, "Tip: run `auth login` first.", "", Info})
 	}
 	return steps
 }
 
-func placeholderCommands(loggedIn bool) []string {
+func placeholderCommands(loggedIn bool, updateNotice string) []string {
 	if !loggedIn {
-		return []string{
+		commands := []string{
 			"open tour",
 			"auth login",
-			"update",
 			"org list",
 			"org use <org-id>",
 			"init [--project <id>] --integration <id>",
@@ -998,11 +1003,14 @@ func placeholderCommands(loggedIn bool) []string {
 			"use <project-id>",
 			"test auto --test-id AT-01 --scenario A",
 		}
+		if updateCommandLabel(updateNotice) != "" {
+			commands = append([]string{"update"}, commands...)
+		}
+		return commands
 	}
-	return []string{
+	commands := []string{
 		"open tour",
 		"org current",
-		"update",
 		"use <project-id>",
 		"init --integration <id>",
 		"projects",
@@ -1017,10 +1025,22 @@ func placeholderCommands(loggedIn bool) []string {
 		"auto datasets --project <id> --test-id <id>",
 		"auto results <test-run-id>",
 	}
+	if updateCommandLabel(updateNotice) != "" {
+		commands = append([]string{"update"}, commands...)
+	}
+	return commands
 }
 
-func postCommandSteps(base []Step, ok bool, loggedIn bool) []Step {
-	home := welcomeSteps(loggedIn)
+func updateCommandLabel(updateNotice string) string {
+	latest := strings.TrimSpace(updateNotice)
+	if latest == "" {
+		return ""
+	}
+	return "update (new version " + latest + ")"
+}
+
+func postCommandSteps(base []Step, ok bool, loggedIn bool, updateNotice string) []Step {
+	home := welcomeSteps(loggedIn, updateNotice)
 	steps := make([]Step, 0, len(base)+4+len(home))
 	steps = append(steps, home...)
 	steps = append(steps, Step{None, "", "", Info})
