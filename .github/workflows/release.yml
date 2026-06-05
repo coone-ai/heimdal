@@ -56,7 +56,7 @@ jobs:
           fi
           echo "PYPI_VERSION=${VERSION}" >> "${GITHUB_ENV}"
 
-      - name: Sync pyproject version
+      - name: Sync Python package version
         run: |
           python - <<'PY'
           import os
@@ -64,17 +64,31 @@ jobs:
           import re
 
           version = os.environ["PYPI_VERSION"]
-          path = pathlib.Path("python/pyproject.toml")
-          text = path.read_text(encoding="utf-8")
-          updated, n = re.subn(
+          pyproject_path = pathlib.Path("python/pyproject.toml")
+          init_path = pathlib.Path("python/src/ailab_eval/__init__.py")
+
+          pyproject_text = pyproject_path.read_text(encoding="utf-8")
+          pyproject_updated, n = re.subn(
               r'(?m)^version\s*=\s*".*"$',
               f'version = "{version}"',
-              text,
+              pyproject_text,
               count=1,
           )
           if n != 1:
               raise SystemExit("Failed to update [project].version in pyproject.toml")
-          path.write_text(updated, encoding="utf-8")
+          pyproject_path.write_text(pyproject_updated, encoding="utf-8")
+
+          init_text = init_path.read_text(encoding="utf-8")
+          init_updated, n = re.subn(
+              r'(?m)^__version__\s*=\s*".*"$',
+              f'__version__ = "{version}"',
+              init_text,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit("Failed to update __version__ in __init__.py")
+          init_path.write_text(init_updated, encoding="utf-8")
+
           print(f"Set Python package version to {version}")
           PY
 

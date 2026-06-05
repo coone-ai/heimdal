@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_REPO = "coone-ai/heimdal"
+PACKAGE_NAME = "coone-ailab-cli"
 API_TIMEOUT_SECONDS = 20
 DOWNLOAD_TIMEOUT_SECONDS = 120
 
@@ -82,10 +84,23 @@ def _fetch_latest_tag(repo: str) -> str:
     return _ensure_tag_prefix(tag)
 
 
+def _installed_package_tag() -> Optional[str]:
+    try:
+        version = importlib.metadata.version(PACKAGE_NAME).strip()
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    if not version or version == "0.0.0":
+        return None
+    return _ensure_tag_prefix(version)
+
+
 def _resolve_tag(repo: str) -> str:
     env_version = os.environ.get("HEIMDAL_VERSION", "").strip()
     if env_version:
         return _ensure_tag_prefix(env_version)
+    package_tag = _installed_package_tag()
+    if package_tag:
+        return package_tag
     return _fetch_latest_tag(repo)
 
 

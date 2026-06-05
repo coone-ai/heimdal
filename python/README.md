@@ -23,5 +23,5 @@ pipx install coone-ailab-cli
 - `HEIMDAL_REPO`: GitHub repository in `owner/name` format.  
   Default: `coone-ai/heimdal`
 - `HEIMDAL_VERSION`: Release tag to pin (for example `v0.0.1`).  
-  Default: latest release
+  Default: installed package version
 - `HEIMDAL_INSTALL_CACHE_DIR`: Cache directory for downloaded binaries
