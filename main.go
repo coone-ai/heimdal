@@ -34,6 +34,7 @@ type model struct {
 	history       []string
 	historyIdx    int
 	scrollOffset  int
+	mouseCopyMode bool
 	tourActive    bool
 	tourIndex     int
 	tourRunning   bool
@@ -290,7 +291,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.placeholder.commands = placeholderCommands(m.loggedIn)
 		m.steps = postCommandSteps(msg.result.Steps, msg.ok, m.loggedIn)
 		m.scrollToBottom()
-		return m, tea.ClearScreen
+		return m, m.afterCommandDoneCmd(msg.result.Prompt)
 
 	case commandEventMsg:
 		if msg.event.done {
@@ -304,7 +305,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.placeholder.commands = placeholderCommands(m.loggedIn)
 			m.steps = postCommandSteps(msg.event.result.Steps, msg.event.ok, m.loggedIn)
 			m.scrollToBottom()
-			return m, tea.ClearScreen
+			return m, m.afterCommandDoneCmd(msg.event.result.Prompt)
 		}
 		if len(msg.event.steps) > 0 {
 			m.steps = append(m.steps, msg.event.steps...)
@@ -337,6 +338,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			m.pushHistory(cmdText)
+			mouseCmd := m.commandStartMouseCmd(cmdText)
 			if cmdText == "exit" || cmdText == "quit" {
 				return m, tea.Quit
 			}
@@ -344,19 +346,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.prompt = "Commands"
 				m.steps = welcomeSteps(m.loggedIn)
 				m.scrollOffset = 0
-				return m, tea.ClearScreen
+				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
 			if cmdText == "back" || cmdText == "home" {
 				m.prompt = "Commands"
 				m.steps = welcomeSteps(m.loggedIn)
 				m.scrollOffset = 0
-				return m, tea.ClearScreen
+				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
 			if cmdText == "?" {
 				m.prompt = "Commands"
 				m.steps = welcomeSteps(m.loggedIn)
 				m.scrollOffset = 0
-				return m, tea.ClearScreen
+				return m, tea.Batch(tea.ClearScreen, mouseCmd)
 			}
 			if strings.EqualFold(cmdText, "open guide tour") || strings.EqualFold(cmdText, "tour") {
 				m.running = true
@@ -373,7 +375,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					{None, "", "", Info},
 				}
 				m.scrollOffset = 0
-				return m, tickTourRun()
+				return m, tea.Batch(mouseCmd, tickTourRun())
 			}
 
 			m.running = true
@@ -382,7 +384,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollOffset = 0
 			events := make(chan commandEvent, 16)
 			m.commandEvents = events
-			return m, tea.Batch(startCommandStream(cmdText, events), waitCommandEvent(events))
+			return m, tea.Batch(mouseCmd, startCommandStream(cmdText, events), waitCommandEvent(events))
 
 		case tea.KeyUp:
 			if m.running {
@@ -460,7 +462,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if !mouseScrollEnabled() {
+		if !mouseScrollEnabled() || m.mouseCopyMode {
 			return m, nil
 		}
 		if m.running {
@@ -661,6 +663,50 @@ func (m *model) clampScroll() {
 
 func (m *model) scrollToBottom() {
 	m.scrollOffset = m.currentPane(m.input, m.inputCursor).MaxScrollOffset()
+}
+
+func (m *model) afterCommandDoneCmd(prompt string) tea.Cmd {
+	if isLoginCommand(prompt) && mouseScrollEnabled() {
+		m.mouseCopyMode = true
+		return tea.Batch(tea.ClearScreen, tea.DisableMouse)
+	}
+	return tea.ClearScreen
+}
+
+func (m *model) enableMouseAfterCopyModeCmd() tea.Cmd {
+	if !m.mouseCopyMode {
+		return nil
+	}
+	m.mouseCopyMode = false
+	if !mouseScrollEnabled() {
+		return nil
+	}
+	return tea.EnableMouseCellMotion
+}
+
+func (m *model) commandStartMouseCmd(input string) tea.Cmd {
+	if isLoginCommand(input) && mouseScrollEnabled() {
+		m.mouseCopyMode = true
+		return tea.DisableMouse
+	}
+	return m.enableMouseAfterCopyModeCmd()
+}
+
+func isLoginCommand(input string) bool {
+	args := parseCommand(input)
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "heimdal" || args[0] == "coval" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "login" {
+		return true
+	}
+	return len(args) >= 2 && args[0] == "auth" && args[1] == "login"
 }
 
 func clampInt(v, min, max int) int {
