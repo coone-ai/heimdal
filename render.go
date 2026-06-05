@@ -263,6 +263,7 @@ type ClaudePane struct {
 	Height        int
 	ScrollOffset  int
 	ActiveTasks   string
+	UpdateNotice  string
 }
 
 func (p ClaudePane) Render() string {
@@ -323,6 +324,9 @@ func (p ClaudePane) Render() string {
 	}
 	if strings.TrimSpace(p.ActiveTasks) != "" {
 		footerText += "  " + strings.TrimSpace(p.ActiveTasks)
+	}
+	if strings.TrimSpace(p.UpdateNotice) != "" {
+		footerText += "  " + strings.TrimSpace(p.UpdateNotice)
 	}
 	footer := fg(colDim).Render(footerText)
 	outerLines = append(outerLines, footer)

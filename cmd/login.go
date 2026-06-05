@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 var loginAppURL string
 var loginAPIURL string
 var loginDev bool
+
+const prodAPIURL = "https://llm-eval-api-530874889975.europe-west1.run.app"
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
@@ -54,13 +57,14 @@ func runLogin() error {
 	tracker.Add("Starting localhost callback server")
 	tracker.Add("Generating CSRF state token")
 	tracker.Add("Opening browser")
+	tracker.Add("Login URL")
 	tracker.Add("Waiting for sign-in")
 	tracker.Add("Saving token")
 
 	fmt.Println()
 	tracker.Start(0)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		tracker.Error(0, fmt.Sprintf("Error: %v", err))
 		fmt.Println(tracker.Render())
@@ -71,25 +75,27 @@ func runLogin() error {
 	tracker.Done(0, fmt.Sprintf("localhost:%d", port))
 
 	tracker.Start(1)
-	stateBytes := make([]byte, 16)
+	stateBytes := make([]byte, 12)
 	if _, err := rand.Read(stateBytes); err != nil {
 		tracker.Error(1, fmt.Sprintf("Error: %v", err))
 		fmt.Println(tracker.Render())
 		return fmt.Errorf("failed to generate state token: %w", err)
 	}
-	state := hex.EncodeToString(stateBytes)
+	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 	tracker.Done(1, "✓")
 
 	tokenCh := make(chan auth.TokenStore, 1)
 	errCh := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux}
+	server := &http.Server{Addr: fmt.Sprintf("localhost:%d", port), Handler: mux}
 
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -99,17 +105,36 @@ func runLogin() error {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
-		if err != nil {
-			errCh <- fmt.Errorf("failed to read request body: %w", err)
-			return
-		}
-		defer r.Body.Close()
-
 		var payload callbackPayload
-		if err := json.Unmarshal(body, &payload); err != nil {
-			errCh <- fmt.Errorf("invalid JSON: %w", err)
-			return
+		contentType := strings.ToLower(r.Header.Get("Content-Type"))
+		if strings.Contains(contentType, "application/x-www-form-urlencoded") || strings.Contains(contentType, "multipart/form-data") {
+			if err := r.ParseForm(); err != nil {
+				errCh <- fmt.Errorf("invalid form payload: %w", err)
+				return
+			}
+			payload = callbackPayload{
+				Token:          r.FormValue("token"),
+				Email:          r.FormValue("email"),
+				State:          r.FormValue("state"),
+				RefreshToken:   r.FormValue("refresh_token"),
+				FirebaseAPIKey: r.FormValue("firebase_api_key"),
+			}
+			if expiresAt := strings.TrimSpace(r.FormValue("expires_at")); expiresAt != "" {
+				if parsed, err := strconv.ParseInt(expiresAt, 10, 64); err == nil {
+					payload.ExpiresAt = parsed
+				}
+			}
+		} else {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 16384))
+			if err != nil {
+				errCh <- fmt.Errorf("failed to read request body: %w", err)
+				return
+			}
+			defer r.Body.Close()
+			if err := json.Unmarshal(body, &payload); err != nil {
+				errCh <- fmt.Errorf("invalid JSON: %w", err)
+				return
+			}
 		}
 
 		if payload.State != state {
@@ -124,7 +149,9 @@ func runLogin() error {
 			return
 		}
 
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!doctype html><title>Heimdal CLI Login</title><body style=\"font-family: system-ui; padding: 32px;\"><h2>CLI login complete.</h2><p>You can return to your terminal.</p></body>"))
 		expiresAt := payload.ExpiresAt
 		if expiresAt <= 0 {
 			expiresAt = time.Now().Add(55 * time.Minute).Unix()
@@ -147,16 +174,21 @@ func runLogin() error {
 	}()
 
 	loginAppURL, loginAPIURL = resolveLoginURLs()
-	authURL := fmt.Sprintf("%s/auth/cli?port=%d&state=%s", strings.TrimRight(loginAppURL, "/"), port, state)
+	authURL := fmt.Sprintf("%s/auth/cli?p=%d&s=%s", strings.TrimRight(loginAppURL, "/"), port, state)
 
 	tracker.Start(2)
 	if err := openBrowser(authURL); err != nil {
-		tracker.Done(2, "Open manually: "+authURL)
+		tracker.Warn(2, "Open manually")
 	} else {
-		tracker.Done(2, "✓")
+		tracker.Done(2, "Opened")
 	}
+	tracker.Done(3, "Printed below")
+	fmt.Println()
+	fmt.Println("Login URL:")
+	fmt.Println(authURL)
+	fmt.Println()
 
-	tracker.Start(3)
+	tracker.Start(4)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -168,8 +200,8 @@ func runLogin() error {
 		select {
 		case ts := <-tokenCh:
 			server.Shutdown(context.Background())
-			tracker.Done(3, "Token received")
-			tracker.Start(4)
+			tracker.Done(4, "Token received")
+			tracker.Start(5)
 
 			// Keep existing org/project context across re-login when possible.
 			if prev, err := auth.LoadToken(); err == nil && prev != nil {
@@ -178,11 +210,11 @@ func runLogin() error {
 			}
 
 			if err := auth.SaveToken(&ts); err != nil {
-				tracker.Error(4, fmt.Sprintf("Error: %v", err))
+				tracker.Error(5, fmt.Sprintf("Error: %v", err))
 				fmt.Println(tracker.Render())
 				return fmt.Errorf("failed to save token: %w", err)
 			}
-			tracker.Done(4, ts.Email)
+			tracker.Done(5, ts.Email)
 			fmt.Println()
 			fmt.Println(tracker.Render())
 			fmt.Println()
@@ -190,7 +222,7 @@ func runLogin() error {
 
 		case err := <-errCh:
 			server.Shutdown(context.Background())
-			tracker.Error(3, fmt.Sprintf("Error: %v", err))
+			tracker.Error(4, fmt.Sprintf("Error: %v", err))
 			fmt.Println(tracker.Render())
 			return err
 
@@ -199,7 +231,7 @@ func runLogin() error {
 
 		case <-ctx.Done():
 			server.Shutdown(context.Background())
-			tracker.Error(3, "Timeout: sign-in was not completed within 5 minutes")
+			tracker.Error(4, "Timeout: sign-in was not completed within 5 minutes")
 			fmt.Println(tracker.Render())
 			return fmt.Errorf("timeout: sign-in was not completed within 5 minutes")
 		}
@@ -213,7 +245,7 @@ func resolveLoginURLs() (string, string) {
 		return appURL, apiURL
 	}
 	appURL := firstNonEmptyString(loginAppURL, os.Getenv("HEIMDAL_APP_URL"), "https://ailab.co-one.co")
-	apiURL := firstNonEmptyString(loginAPIURL, os.Getenv("HEIMDAL_API_URL"), "https://ailab.co-one.co")
+	apiURL := firstNonEmptyString(loginAPIURL, os.Getenv("HEIMDAL_API_URL"), prodAPIURL)
 	return appURL, apiURL
 }
 

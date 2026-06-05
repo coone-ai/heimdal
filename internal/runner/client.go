@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const defaultBaseURL = "https://ailab.co-one.co"
+const defaultBaseURL = "https://llm-eval-api-530874889975.europe-west1.run.app"
 
 // ── Client ────────────────────────────────────────────────────────────────────
 

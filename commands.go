@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // CommandResult is the result returned by the dispatcher.
@@ -87,6 +90,119 @@ func Dispatch(input string) (CommandResult, bool) {
 	}
 
 	return CommandResult{Prompt: input, Steps: steps}, err == nil
+}
+
+func DispatchStream(input string, emit func([]Step)) (CommandResult, bool) {
+	args := parseCommand(input)
+	if len(args) == 0 {
+		return CommandResult{Prompt: input}, false
+	}
+
+	if args[0] == "heimdal" || args[0] == "coval" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		args = []string{"--help"}
+	}
+	if args[0] == "help" || args[0] == "?" {
+		args = []string{"--help"}
+	}
+	args = removeFlag(args, "--watch")
+	if len(args) > 0 && args[0] == "init" && !hasAnyFlag(args[1:]) {
+		return CommandResult{
+			Prompt: input,
+			Steps: []Step{
+				{Bash, "heimdal init", "failed", Fail},
+				{None, "Interactive init prompts are not available inside TUI.", "", Warn},
+				{None, "Run in terminal, or use flags: init [--project <id>] --integration <id>", "", Info},
+				{None, "If a project is already selected with `use`, --project is optional.", "", Info},
+				{None, "If heimdal.yaml already exists, init updates it directly.", "", Info},
+			},
+		}, false
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return CommandResult{
+			Prompt: input,
+			Steps:  []Step{{None, fmt.Sprintf("Executable not found: %v", err), "", Fail}},
+		}, false
+	}
+
+	commandLabel := "heimdal " + strings.Join(args, " ")
+	cmd := exec.Command(exe, args...)
+	cmd.Env = os.Environ()
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return CommandResult{Prompt: input, Steps: []Step{{Bash, commandLabel, "failed", Fail}, {None, err.Error(), "", Fail}}}, false
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return CommandResult{Prompt: input, Steps: []Step{{Bash, commandLabel, "failed", Fail}, {None, err.Error(), "", Fail}}}, false
+	}
+	if err := cmd.Start(); err != nil {
+		return CommandResult{Prompt: input, Steps: []Step{{Bash, commandLabel, "failed", Fail}, {None, err.Error(), "", Fail}}}, false
+	}
+
+	var mu sync.Mutex
+	collected := []Step{}
+	errLines := []string{}
+	collect := func(steps []Step, isErr bool) {
+		if len(steps) == 0 {
+			return
+		}
+		mu.Lock()
+		collected = append(collected, steps...)
+		if isErr {
+			for _, s := range steps {
+				errLines = append(errLines, s.Command)
+			}
+		}
+		mu.Unlock()
+		if emit != nil {
+			emit(steps)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go scanCommandOutput(stdout, Info, false, collect, &wg)
+	go scanCommandOutput(stderr, Warn, true, collect, &wg)
+	err = cmd.Wait()
+	wg.Wait()
+
+	status := Done
+	detail := "done"
+	if err != nil {
+		status = Fail
+		detail = "failed"
+	}
+	mu.Lock()
+	finalSteps := make([]Step, 0, len(collected)+4)
+	finalSteps = append(finalSteps, Step{Bash, commandLabel, detail, status})
+	finalSteps = append(finalSteps, collected...)
+	if len(errLines) > 0 {
+		finalSteps = append(finalSteps, explainCommonErrors(strings.Join(errLines, "\n"))...)
+	}
+	mu.Unlock()
+	if len(finalSteps) == 1 && err != nil {
+		finalSteps = append(finalSteps, Step{None, err.Error(), "", Fail})
+	}
+	return CommandResult{Prompt: input, Steps: finalSteps}, err == nil
+}
+
+func scanCommandOutput(r io.Reader, status Status, isErr bool, collect func([]Step, bool), wg *sync.WaitGroup) {
+	defer wg.Done()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(sanitizeCommandOutput(scanner.Text()))
+		if line == "" {
+			continue
+		}
+		collect(outputToSteps(line, status), isErr)
+	}
 }
 
 func explainCommonErrors(errText string) []Step {

@@ -21,7 +21,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show CLI version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("heimdal %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		fmt.Printf("heimdal %s (commit: %s, built: %s)\n", DisplayVersion(), Commit, Date)
 	},
 }
 

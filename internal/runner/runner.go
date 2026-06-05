@@ -84,8 +84,9 @@ func NewClientFromToken(cfg *config.Config) (*HeimdalClient, error) {
 func resolveAPIBaseURL(configBaseURL, storedAPIURL string) string {
 	normalizeLegacy := func(v string) string {
 		v = strings.TrimSpace(v)
-		if strings.Contains(strings.ToLower(v), "api.heimdal.dev") {
-			return "https://ailab.co-one.co"
+		lower := strings.ToLower(v)
+		if strings.Contains(lower, "api.heimdal.dev") || strings.TrimRight(lower, "/") == "https://ailab.co-one.co" {
+			return defaultBaseURL
 		}
 		return v
 	}
@@ -94,11 +95,28 @@ func resolveAPIBaseURL(configBaseURL, storedAPIURL string) string {
 	if isDevMode() {
 		return firstNonEmpty(os.Getenv("HEIMDAL_API_URL"), "http://localhost:5002", configBaseURL)
 	}
-	return firstNonEmpty(configBaseURL, os.Getenv("HEIMDAL_API_URL"), storedAPIURL, defaultBaseURL)
+	return firstNonEmpty(nonLocalAPIURL(configBaseURL), nonLocalAPIURL(os.Getenv("HEIMDAL_API_URL")), nonLocalAPIURL(storedAPIURL), defaultBaseURL)
 }
 
 func isDevMode() bool {
 	return strings.EqualFold(os.Getenv("HEIMDAL_ENV"), "dev") || os.Getenv("HEIMDAL_DEV") == "1"
+}
+
+func activeProjectID() string {
+	ts, err := auth.LoadToken()
+	if err != nil || ts == nil {
+		return ""
+	}
+	return strings.TrimSpace(ts.ActiveProjectID)
+}
+
+func nonLocalAPIURL(v string) string {
+	v = strings.TrimSpace(v)
+	lower := strings.ToLower(v)
+	if strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "::1") {
+		return ""
+	}
+	return v
 }
 
 func normalizeAPIKey(v string) string {
@@ -121,7 +139,8 @@ func (r *Runner) RunAutoTests(ctx context.Context, overrides RunOverrides, hooks
 	}
 
 	cfg := r.cfg
-	projectID := firstNonEmpty(overrides.ProjectID, cfg.Project.ID)
+	projectID := firstNonEmpty(overrides.ProjectID, activeProjectID(), cfg.Project.ID)
+	cfg.Project.ID = projectID
 	report := &RunReport{
 		ProjectID: projectID,
 		Version:   resolveVersion(cfg, overrides),

@@ -77,7 +77,7 @@ func autoRunsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			if strings.TrimSpace(projectID) == "" {
 				// Unified UX: `auto runs` can also act as the test catalog entrypoint.
 				return printAutoRunTestsCatalog(client, testID)
@@ -135,7 +135,7 @@ func autoDatasetsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -180,7 +180,7 @@ func autoResultsCmd() *cobra.Command {
 
 			runID := strings.TrimSpace(args[0])
 			if !looksLikeFullUUID(runID) {
-				projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+				projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 				projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 				if err != nil {
 					return err
@@ -259,7 +259,7 @@ Subcommands:
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -297,7 +297,7 @@ func autoIntegrationsPullCmd() *cobra.Command {
 				return err
 			}
 
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -346,7 +346,7 @@ func autoIntegrationsApplyCmd() *cobra.Command {
 				return err
 			}
 
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -484,7 +484,7 @@ Use this command to find knowledge base IDs for tests that need KB context
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -553,7 +553,7 @@ Processing continues asynchronously after upload; use --watch or
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err
@@ -614,7 +614,7 @@ func knowledgeBasesStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectID = firstNonEmptyLocal(projectID, cfg.Project.ID, activeProjectContextID())
+			projectID = firstNonEmptyLocal(projectID, activeProjectContextID(), cfg.Project.ID)
 			projectID, err = resolveProjectIDPrefixWithClient(client, projectID)
 			if err != nil {
 				return err

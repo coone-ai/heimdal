@@ -42,12 +42,14 @@ type model struct {
 	tourStepIdx   int
 	tourSummary   string
 	activeTasks   string
+	updateNotice  string
+	commandEvents <-chan commandEvent
 }
 
 func initialModel() model {
 	loggedIn := isLoggedIn()
 	return model{
-		version:       "0.0.1",
+		version:       cmd.DisplayVersion(),
 		prompt:        "Commands",
 		steps:         welcomeSteps(loggedIn),
 		width:         86,
@@ -67,7 +69,7 @@ func initialModel() model {
 // ─── Bubble Tea interface ─────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tickPlaceholder(), fetchActiveTasks())
+	return tea.Batch(tickPlaceholder(), fetchActiveTasks(), fetchUpdateNotice())
 }
 
 type commandDoneMsg struct {
@@ -75,9 +77,23 @@ type commandDoneMsg struct {
 	ok     bool
 }
 
+type commandEvent struct {
+	steps  []Step
+	result CommandResult
+	ok     bool
+	done   bool
+}
+
+type commandEventMsg struct {
+	event commandEvent
+}
+
 type placeholderTickMsg struct{}
 type activeTasksMsg struct {
 	summary string
+}
+type updateNoticeMsg struct {
+	notice string
 }
 type tourTickMsg struct{}
 type tourFinishMsg struct{}
@@ -142,6 +158,7 @@ const (
 	tourGapDelay    = 4 * time.Second
 	tourFinishDelay = 8 * time.Second
 	activeTaskDelay = 10 * time.Second
+	updateDelay     = 1 * time.Hour
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -155,6 +172,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case activeTasksMsg:
 		m.activeTasks = msg.summary
 		return m, tickActiveTasks()
+
+	case updateNoticeMsg:
+		m.updateNotice = msg.notice
+		return m, tickUpdateNotice()
 
 	case tourTickMsg:
 		if !m.tourActive {
@@ -271,6 +292,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scrollToBottom()
 		return m, tea.ClearScreen
 
+	case commandEventMsg:
+		if msg.event.done {
+			m.running = false
+			m.commandEvents = nil
+			m.prompt = "Commands"
+			m.authStatus = currentAuthStatus()
+			m.orgStatus = currentOrgStatus()
+			m.projectStatus = currentProjectStatus()
+			m.loggedIn = isLoggedIn()
+			m.placeholder.commands = placeholderCommands(m.loggedIn)
+			m.steps = postCommandSteps(msg.event.result.Steps, msg.event.ok, m.loggedIn)
+			m.scrollToBottom()
+			return m, tea.ClearScreen
+		}
+		if len(msg.event.steps) > 0 {
+			m.steps = append(m.steps, msg.event.steps...)
+			m.scrollToBottom()
+		}
+		return m, waitCommandEvent(m.commandEvents)
+
 	case tea.KeyMsg:
 		if m.tourActive {
 			switch msg.Type {
@@ -339,10 +380,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prompt = "Commands"
 			m.steps = []Step{{Bash, "heimdal " + cmdText, "running", Running}}
 			m.scrollOffset = 0
-			return m, func() tea.Msg {
-				result, ok := Dispatch(cmdText)
-				return commandDoneMsg{result: result, ok: ok}
-			}
+			events := make(chan commandEvent, 16)
+			m.commandEvents = events
+			return m, tea.Batch(startCommandStream(cmdText, events), waitCommandEvent(events))
 
 		case tea.KeyUp:
 			if m.running {
@@ -503,6 +543,7 @@ func (m model) currentPane(input string, inputCursor int) ClaudePane {
 		Height:        m.height,
 		ScrollOffset:  m.scrollOffset,
 		ActiveTasks:   m.activeTasks,
+		UpdateNotice:  m.updateNotice,
 	}
 }
 
@@ -690,10 +731,54 @@ func tickPlaceholder() tea.Cmd {
 	})
 }
 
+func startCommandStream(input string, events chan<- commandEvent) tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			result, ok := DispatchStream(input, func(steps []Step) {
+				events <- commandEvent{steps: steps}
+			})
+			events <- commandEvent{result: result, ok: ok, done: true}
+			close(events)
+		}()
+		return nil
+	}
+}
+
+func waitCommandEvent(events <-chan commandEvent) tea.Cmd {
+	return func() tea.Msg {
+		if events == nil {
+			return nil
+		}
+		event, ok := <-events
+		if !ok {
+			return nil
+		}
+		return commandEventMsg{event: event}
+	}
+}
+
 func tickActiveTasks() tea.Cmd {
 	return tea.Tick(activeTaskDelay, func(time.Time) tea.Msg {
 		return fetchActiveTasks()()
 	})
+}
+
+func tickUpdateNotice() tea.Cmd {
+	return tea.Tick(updateDelay, func(time.Time) tea.Msg {
+		return fetchUpdateNotice()()
+	})
+}
+
+func fetchUpdateNotice() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		latest, err := cmd.LatestReleaseTag(ctx)
+		if err != nil || !cmd.IsNewerVersion(cmd.Version, latest) {
+			return updateNoticeMsg{}
+		}
+		return updateNoticeMsg{notice: "update available: " + latest}
+	}
 }
 
 func fetchActiveTasks() tea.Cmd {
@@ -842,6 +927,7 @@ func welcomeSteps(loggedIn bool) []Step {
 		Step{None, "Session", "", Info},
 		Step{None, "auth login", "", Info},
 		Step{None, "auth logout", "", Info},
+		Step{None, "update", "", Info},
 		Step{None, "org list", "", Info},
 		Step{None, "org use <org-id>", "", Info},
 		Step{None, "use <project-id>", "", Info},
@@ -857,6 +943,7 @@ func placeholderCommands(loggedIn bool) []string {
 		return []string{
 			"open tour",
 			"auth login",
+			"update",
 			"org list",
 			"org use <org-id>",
 			"init [--project <id>] --integration <id>",
@@ -869,6 +956,7 @@ func placeholderCommands(loggedIn bool) []string {
 	return []string{
 		"open tour",
 		"org current",
+		"update",
 		"use <project-id>",
 		"init --integration <id>",
 		"projects",

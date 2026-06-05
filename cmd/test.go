@@ -100,11 +100,9 @@ terminal summary plus optional JSON output.`,
 				}
 			}
 
-			// project override
 			if projectID != "" {
 				cfg.Project.ID = projectID
-			}
-			if cfg.Project.ID == "" {
+			} else if activeProjectContextID() != "" {
 				cfg.Project.ID = activeProjectContextID()
 			}
 			if cfg.Project.ID != "" {

@@ -22,7 +22,7 @@ func init() {
 
 func runDemo() {
 	pane := output.ClaudePane{
-		Version: "0.0.1",
+		Version: DisplayVersion(),
 		Prompt:  "eval the refund agent and fix any regressions",
 		Steps: []output.PaneStep{
 			{output.ToolBash, "deepeval test run agents/checkout.py", "faithfulness 0.64", output.PaneStepWarn},
